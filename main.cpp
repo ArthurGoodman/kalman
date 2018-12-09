@@ -13,10 +13,13 @@
 namespace {
 
 static constexpr double c_epsilon = 1e-4;
-static constexpr double c_wheel_base = 40;
-static constexpr double c_max_speed = 5000;
-static constexpr double c_max_acceleration = 1e3;
+
+static constexpr double c_max_speed = 200 * 3.6;
+static constexpr double c_max_acceleration = 40 * 3.6;
 static constexpr double c_max_wheel_angle = M_PI / 5;
+
+static constexpr double c_vehicle_wheel_base = 3;
+static constexpr double c_vehicle_width = 2;
 
 struct VehicleState
 {
@@ -46,7 +49,7 @@ public: // methods
 
         if (m_breaking)
         {
-            static constexpr double c_breaking_time = 1.0;
+            static constexpr double c_breaking_time = 5.0;
             static constexpr double c_acceleration =
                 c_max_speed / c_breaking_time;
 
@@ -91,37 +94,36 @@ public: // methods
             }
         }
 
-        if (m_turning_left)
-        {
-            static constexpr double c_steering_time = 0.5;
-            const double c_steering_rate = c_max_wheel_angle / c_steering_time *
-                                           (1.1 - std::abs(v) / c_max_speed);
+        static constexpr double c_steering_time = 0.5;
 
-            theta -= c_steering_rate * dt;
-        }
-        else if (m_turning_right)
+        if ((m_turning_left && theta > 0) || (m_turning_right && theta < 0) ||
+            (!m_turning_left && !m_turning_right))
         {
-            static constexpr double c_steering_time = 0.5;
-            const double c_steering_rate = c_max_wheel_angle / c_steering_time *
-                                           (1.1 - std::abs(v) / c_max_speed);
+            if (std::abs(theta) > c_epsilon)
+            {
+                const double sign = theta > 0 ? -1 : 1;
+                const double steering_rate =
+                    sign * c_max_wheel_angle / c_steering_time * 0.975 *
+                    std::pow(std::abs(v) / c_max_speed, 1.0 / 8);
 
-            theta += c_steering_rate * dt;
-        }
-        else if (std::abs(theta) > c_epsilon)
-        {
-            static constexpr double c_steering_time = 0.125;
-            const double c_steering_rate =
-                c_max_wheel_angle / c_steering_time * std::abs(v) / c_max_speed;
-
-            const double sign = theta > 0 ? -1 : 1;
-            theta += sign * c_steering_rate * dt;
+                theta += steering_rate * dt;
+            }
+            else
+            {
+                theta = 0.0;
+            }
         }
         else
         {
-            theta = 0.0;
+            const double sign = m_turning_left ? -1 : 1;
+            const double steering_rate =
+                sign * c_max_wheel_angle / c_steering_time *
+                (1.0 - 0.975 * std::pow(std::abs(v) / c_max_speed, 1.0 / 8));
+
+            theta += steering_rate * dt;
         }
 
-        const double w = std::tan(theta) / c_wheel_base * v;
+        const double w = std::tan(theta) / c_vehicle_wheel_base * v;
 
         if (std::abs(w) <= c_epsilon)
         {
@@ -312,14 +314,14 @@ protected: // methods
 
     void paintEvent(QPaintEvent *) override
     {
-        static constexpr double c_car_width = c_wheel_base / 1.75;
+        static constexpr double c_car_width = c_vehicle_wheel_base / 1.75;
 
         VehicleState vehicle_state = m_controller.getState();
 
         auto x = vehicle_state.position;
         double alpha = vehicle_state.heading;
         const Eigen::Rotation2Dd R{alpha};
-        x += R * Eigen::Vector2d{c_wheel_base / 2, 0.0};
+        x += R * Eigen::Vector2d{c_vehicle_wheel_base / 2, 0.0};
 
         QPointF pos{x.x(), x.y()};
 
@@ -362,15 +364,16 @@ protected: // methods
         p.strokePath(path, QPen{Qt::gray, 1});
 
         const auto draw_vehicle = [&]() {
-            p.drawRect(QRect(0, -c_car_width / 2, c_wheel_base, c_car_width));
+            p.drawRect(
+                QRect(0, -c_car_width / 2, c_vehicle_wheel_base, c_car_width));
         };
 
         const auto draw_wheel = [&]() {
             p.fillRect(
                 QRect(
-                    -c_wheel_base / 8,
+                    -c_vehicle_wheel_base / 8,
                     -c_car_width / 8,
-                    c_wheel_base / 4,
+                    c_vehicle_wheel_base / 4,
                     c_car_width / 4),
                 Qt::white);
         };
@@ -383,13 +386,13 @@ protected: // methods
         draw_vehicle();
 
         p.save();
-        p.translate(c_wheel_base, -c_car_width / 2);
+        p.translate(c_vehicle_wheel_base, -c_car_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(c_wheel_base, c_car_width / 2);
+        p.translate(c_vehicle_wheel_base, c_car_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
         draw_wheel();
         p.restore();
@@ -410,11 +413,11 @@ protected: // methods
 
         QString info;
         info.sprintf(
-            "Speed: %.04f pix/s\n"
-            "Acceleration: %.04f pix/s^2\n"
+            "Speed: %.04f km/h\n"
+            "Acceleration: %.04f m/s^2\n"
             "Heading: %.04f deg\n"
             "Wheel angle: %.04f deg\n",
-            vehicle_state.speed,
+            vehicle_state.speed / 3.6,
             vehicle_state.acceleration,
             vehicle_state.heading / M_PI * 180,
             vehicle_state.wheel_angle / M_PI * 180);
@@ -431,6 +434,7 @@ private: // fields
     std::chrono::high_resolution_clock::time_point m_last_update =
         std::chrono::high_resolution_clock::now();
     QPointF m_camera_pos;
+    double m_scale = 20;
 };
 
 } // namespace
