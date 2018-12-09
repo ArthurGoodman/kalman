@@ -1,7 +1,7 @@
+#include <chrono>
 #include <iostream>
 #include <Eigen/Geometry>
 #include <QtCore/QDebug>
-#include <QtCore/QElapsedTimer>
 #include <QtCore/QTimer>
 #include <QtGui/QFontDatabase>
 #include <QtGui/QKeyEvent>
@@ -214,10 +214,12 @@ public: // methods
 protected: // methods
     void timerEvent(QTimerEvent *) override
     {
-        static constexpr double c_nsecs_in_sec = 1e-9;
-        double dt = m_timer.nsecsElapsed() * c_nsecs_in_sec;
+        double dt =
+            std::chrono::duration_cast<std::chrono::duration<double>>(
+                std::chrono::high_resolution_clock::now() - m_last_update)
+                .count();
+        m_last_update = std::chrono::high_resolution_clock::now();
         m_controller.update(dt);
-        m_timer.restart();
     }
 
     void keyPressEvent(QKeyEvent *e) override
@@ -328,19 +330,25 @@ protected: // methods
 
         p.translate(rect().center());
 
-        static QPointF camera_pos = -pos;
-        double c_cam_alpha = std::pow(
-            std::atan(QVector2D(-pos - camera_pos).length() / height()) / M_PI *
-                2,
-            1.5);
-        camera_pos = c_cam_alpha * -pos + (1.0 - c_cam_alpha) * camera_pos;
+        static const auto gain = [](double x, double k) {
+            double a = 0.5 * pow(2.0 * ((x < 0.5) ? x : 1.0 - x), k);
+            return (x < 0.5) ? a : 1.0 - a;
+        };
+
+        if (m_camera_pos.isNull())
+        {
+            m_camera_pos = -pos;
+        }
+        double len = QVector2D(-pos - m_camera_pos).length() / height();
+        double c_cam_alpha = gain(len, 3);
+        m_camera_pos = c_cam_alpha * -pos + (1.0 - c_cam_alpha) * m_camera_pos;
 
         m_trajectory.emplace_back(pos);
 
         p.setPen(QPen{Qt::white, 2});
 
         p.save();
-        p.translate(camera_pos);
+        p.translate(m_camera_pos);
 
         QPainterPath path;
         if (!m_trajectory.empty())
@@ -353,53 +361,49 @@ protected: // methods
         }
         p.strokePath(path, QPen{Qt::gray, 1});
 
+        const auto draw_vehicle = [&]() {
+            p.drawRect(QRect(0, -c_car_width / 2, c_wheel_base, c_car_width));
+        };
+
+        const auto draw_wheel = [&]() {
+            p.fillRect(
+                QRect(
+                    -c_wheel_base / 8,
+                    -c_car_width / 8,
+                    c_wheel_base / 4,
+                    c_car_width / 4),
+                Qt::white);
+        };
+
         QPointF base_pos{vehicle_state.position.x(),
                          vehicle_state.position.y()};
+
         p.translate(base_pos);
         p.rotate(vehicle_state.heading / M_PI * 180);
-        p.drawRect(QRect(0, -c_car_width / 2, c_wheel_base, c_car_width));
+        draw_vehicle();
+
         p.save();
         p.translate(c_wheel_base, -c_car_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
-        p.fillRect(
-            QRect(
-                -c_wheel_base / 8,
-                -c_car_width / 8,
-                c_wheel_base / 4,
-                c_car_width / 4),
-            Qt::white);
+        draw_wheel();
         p.restore();
+
         p.save();
         p.translate(c_wheel_base, c_car_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
-        p.fillRect(
-            QRect(
-                -c_wheel_base / 8,
-                -c_car_width / 8,
-                c_wheel_base / 4,
-                c_car_width / 4),
-            Qt::white);
+        draw_wheel();
         p.restore();
+
         p.save();
         p.translate(0, -c_car_width / 2);
-        p.fillRect(
-            QRect(
-                -c_wheel_base / 8,
-                -c_car_width / 8,
-                c_wheel_base / 4,
-                c_car_width / 4),
-            Qt::white);
+        draw_wheel();
         p.restore();
+
         p.save();
         p.translate(0, c_car_width / 2);
-        p.fillRect(
-            QRect(
-                -c_wheel_base / 8,
-                -c_car_width / 8,
-                c_wheel_base / 4,
-                c_car_width / 4),
-            Qt::white);
+        draw_wheel();
         p.restore();
+
         p.restore();
 
         QPointF text_pos = QPointF{200, -200};
@@ -422,9 +426,11 @@ protected: // methods
     }
 
 private: // fields
-    QElapsedTimer m_timer;
     CVehicleController m_controller;
     std::vector<QPointF> m_trajectory;
+    std::chrono::high_resolution_clock::time_point m_last_update =
+        std::chrono::high_resolution_clock::now();
+    QPointF m_camera_pos;
 };
 
 } // namespace
