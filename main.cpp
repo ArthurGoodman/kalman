@@ -1,5 +1,6 @@
 #include <chrono>
 #include <iostream>
+#include <random>
 #include <Eigen/Geometry>
 #include <QtCore/QDebug>
 #include <QtCore/QTimer>
@@ -342,6 +343,7 @@ class CWidget final : public QWidget
 {
 public: // methods
     explicit CWidget()
+        : m_gen{m_rd()}
     {
         startTimer(0);
 
@@ -354,8 +356,8 @@ public: // methods
             static_cast<int>(dp),
             static_cast<int>(mp),
             static_cast<int>(cp),
-            1e-1,
-            1e-3,
+            0.0,
+            0.0,
             m_model_ptr,
             CV_64F};
 
@@ -365,6 +367,16 @@ public: // methods
         initial_state.heading = -M_PI / 2;
 
         params.stateInit = structToCvMat(initial_state);
+
+        params.processNoiseCov.at<double>(0, 0) = 1e-1;
+        params.processNoiseCov.at<double>(1, 1) = 1e-1;
+        params.processNoiseCov.at<double>(2, 2) = 1e-1;
+        params.processNoiseCov.at<double>(3, 3) = 1e-1;
+
+        params.measurementNoiseCov.at<double>(0, 0) = 0.5;
+        params.measurementNoiseCov.at<double>(1, 1) = 0.5;
+        params.measurementNoiseCov.at<double>(2, 2) = 1e-2;
+        params.measurementNoiseCov.at<double>(3, 3) = 1e-2;
 
         m_filter = cv::tracking::createAugmentedUnscentedKalmanFilter(params);
     }
@@ -391,9 +403,11 @@ protected: // methods
         ukf_control.acceleration = a;
         ukf_control.yaw_rate = m_controller.getYawRate();
 
-        ukf_measurement.position = state.position;
-        ukf_measurement.speed = state.speed;
-        ukf_measurement.heading = state.heading;
+        ukf_measurement.position =
+            state.position +
+            Vector2d{m_position_dist(m_gen), m_position_dist(m_gen)};
+        ukf_measurement.speed = state.speed + m_speed_dist(m_gen);
+        ukf_measurement.heading = state.heading + m_heading_dist(m_gen);
 
         m_model_ptr->setDeltaTime(dt);
 
@@ -641,6 +655,12 @@ private: // fields
     cv::Ptr<CUkfSystemModel> m_model_ptr;
     cv::Ptr<cv::tracking::UnscentedKalmanFilter> m_filter;
     std::vector<Vector2d> m_ukf_trajectory;
+
+    std::random_device m_rd;
+    std::mt19937 m_gen;
+    std::normal_distribution<double> m_position_dist{0, 0.5};
+    std::normal_distribution<double> m_speed_dist{0, 1e-2};
+    std::normal_distribution<double> m_heading_dist{0, 1e-2};
 };
 
 } // namespace
