@@ -284,7 +284,7 @@ public: // methods
             std::min(m_state.acceleration, c_max_acceleration));
 
         m_state.heading = alpha + w * dt;
-        m_state.heading = std::fmod(m_state.heading + 2 * M_PI, 2 * M_PI);
+        m_state.heading = m_state.heading;
 
         m_state.wheel_angle = theta;
         m_state.wheel_angle = std::max(
@@ -621,7 +621,7 @@ protected: // methods
             "Wheel angle: %.04f deg\n",
             vehicle_state.speed / 3.6,
             vehicle_state.acceleration,
-            vehicle_state.heading / M_PI * 180,
+            std::fmod(vehicle_state.heading + 2 * M_PI, 2 * M_PI) / M_PI * 180,
             vehicle_state.wheel_angle / M_PI * 180);
 
         p.setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
