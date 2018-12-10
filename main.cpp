@@ -63,6 +63,7 @@ struct UkfMeasurement
 {
     Vector2d position;
     double speed;
+    double heading;
 };
 
 class CUkfSystemModel final : public cv::tracking::UkfSystemModel
@@ -79,6 +80,7 @@ public: // methods
 
         z.position = state.position;
         z.speed = state.speed;
+        z.heading = state.heading;
 
         cv::Mat mat = structToCvMat(z) + n_k;
         mat.copyTo(z_k);
@@ -100,7 +102,9 @@ public: // methods
         //{
         const Eigen::Rotation2Dd R{state.heading};
         new_state.position =
-            state.position + R * Vector2d{state.speed, 0.0} * m_dt;
+            state.position +
+            R * Vector2d{state.speed + control.acceleration * m_dt / 2, 0.0} *
+                m_dt;
         //}
         // else
         //{
@@ -249,7 +253,7 @@ public: // methods
         if (std::abs(w) <= c_epsilon)
         {
             const Eigen::Rotation2Dd R{alpha};
-            m_state.position = x + R * Vector2d{v * dt + a * dt * dt / 2, 0.0};
+            m_state.position = x + R * Vector2d{v + a * dt / 2, 0.0} * dt;
         }
         else
         {
@@ -348,8 +352,8 @@ public: // methods
             static_cast<int>(dp),
             static_cast<int>(mp),
             static_cast<int>(cp),
-            1e-1,
-            1e-1,
+            1e-2,
+            1e-4,
             m_model_ptr,
             CV_64F};
 
@@ -387,6 +391,7 @@ protected: // methods
 
         ukf_measurement.position = state.position;
         ukf_measurement.speed = state.speed;
+        ukf_measurement.heading = state.heading;
 
         m_model_ptr->setDeltaTime(dt);
 
