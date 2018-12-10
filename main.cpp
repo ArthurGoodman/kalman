@@ -9,6 +9,7 @@
 #include <QtGui/QPainterPath>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
+#include <opencv2/tracking/kalman_filters.hpp>
 
 namespace {
 
@@ -21,9 +22,126 @@ static constexpr double c_max_wheel_angle = M_PI / 5;
 static constexpr double c_vehicle_wheel_base = 3;
 static constexpr double c_vehicle_width = 2;
 
+using Vector2d = Eigen::Matrix<double, 2, 1, false>;
+
+template <class T>
+cv::Mat structToCvMat(const T &data)
+{
+    cv::Mat mat(sizeof(data) / sizeof(double), 1, CV_64F);
+    for (int i = 0; i < mat.rows; i++)
+    {
+        mat.at<double>(i, 0) = *(reinterpret_cast<const double *>(&data) + i);
+    }
+    return mat;
+}
+
+template <class T>
+T cvMatToStruct(const cv::Mat &mat)
+{
+    T data;
+    for (int i = 0; i < mat.rows; i++)
+    {
+        *(reinterpret_cast<double *>(&data) + i) = mat.at<double>(i, 0);
+    }
+    return data;
+}
+
+struct UkfState
+{
+    Vector2d position;
+    double speed;
+    double heading;
+};
+
+struct UkfControl
+{
+    double acceleration;
+    double yaw_rate;
+};
+
+struct UkfMeasurement
+{
+    Vector2d position;
+    double speed;
+};
+
+class CUkfSystemModel final : public cv::tracking::UkfSystemModel
+{
+public: // methods
+    void measurementFunction(
+        const cv::Mat &x_k,
+        const cv::Mat &n_k,
+        cv::Mat &z_k) override
+    {
+        UkfState state = cvMatToStruct<UkfState>(x_k);
+
+        UkfMeasurement z = cvMatToStruct<UkfMeasurement>(x_k);
+
+        z.position = state.position;
+        z.speed = state.speed;
+
+        cv::Mat mat = structToCvMat(z) + n_k;
+        mat.copyTo(z_k);
+    }
+
+    void stateConversionFunction(
+        const cv::Mat &x_k,
+        const cv::Mat &u_k,
+        const cv::Mat &v_k,
+        cv::Mat &x_kplus1) override
+    {
+        UkfState state = cvMatToStruct<UkfState>(x_k);
+        UkfControl control = cvMatToStruct<UkfControl>(u_k);
+
+        UkfState new_state;
+
+        const double w = control.yaw_rate;
+        if (std::abs(w) <= c_epsilon)
+        {
+            const Eigen::Rotation2Dd R{state.heading};
+            new_state.position =
+                state.position + R * Vector2d{state.speed, 0.0} * m_dt;
+        }
+        else
+        {
+            const double a = control.acceleration;
+            const double v = state.speed;
+            const double dt = state.speed;
+            const double alpha = state.heading;
+
+            const double delta_x =
+                1.0 / w / w *
+                ((v * w + a * w * dt) * std::sin(alpha + w * dt) +
+                 a * std::cos(alpha + w * dt) - v * w * std::sin(alpha) -
+                 a * std::cos(alpha));
+            const double delta_y =
+                1.0 / w / w *
+                ((-v * w - a * w * dt) * std::cos(alpha + w * dt) +
+                 a * std::sin(alpha + w * dt) + v * w * std::cos(alpha) -
+                 a * std::sin(alpha));
+
+            new_state.position = state.position + Vector2d{delta_x, delta_y};
+        }
+        new_state.speed = state.speed + control.acceleration * m_dt;
+
+        new_state.heading = state.heading + control.yaw_rate * m_dt;
+
+        cv::Mat mat = structToCvMat(new_state) + v_k;
+        mat.copyTo(x_kplus1);
+    }
+
+    void setDeltaTime(double dt)
+    {
+        m_dt = dt;
+    }
+
+private: // fields
+    double m_dt;
+};
+
 struct VehicleState
 {
-    Eigen::Vector2d position;
+    Vector2d position;
     double speed;
     double acceleration;
     double heading;
@@ -125,12 +243,12 @@ public: // methods
         }
 
         const double w = std::tan(theta) / c_vehicle_wheel_base * v;
+        m_w = w;
 
         if (std::abs(w) <= c_epsilon)
         {
             const Eigen::Rotation2Dd R{alpha};
-            m_state.position =
-                x + R * Eigen::Vector2d{v * dt + a * dt * dt / 2, 0.0};
+            m_state.position = x + R * Vector2d{v * dt + a * dt * dt / 2, 0.0};
         }
         else
         {
@@ -145,7 +263,7 @@ public: // methods
                  a * std::sin(alpha + w * dt) + v * w * std::cos(alpha) -
                  a * std::sin(alpha));
 
-            m_state.position = x + Eigen::Vector2d{delta_x, delta_y};
+            m_state.position = x + Vector2d{delta_x, delta_y};
         }
 
         m_state.speed = v + a * dt;
@@ -170,6 +288,11 @@ public: // methods
     VehicleState getState() const
     {
         return m_state;
+    }
+
+    double getYawRate() const
+    {
+        return m_w;
     }
 
     void setTurningLeft(bool value)
@@ -204,6 +327,8 @@ private: // fields
     bool m_accelerating = false;
     bool m_accelerating_backwards = false;
     bool m_breaking = false;
+
+    double m_w = 0.0;
 };
 
 class CWidget final : public QWidget
@@ -212,17 +337,65 @@ public: // methods
     explicit CWidget()
     {
         startTimer(0);
+
+        const std::size_t dp = sizeof(UkfState) / sizeof(double);
+        const std::size_t mp = sizeof(UkfMeasurement) / sizeof(double);
+        const std::size_t cp = sizeof(UkfControl) / sizeof(double);
+
+        m_model_ptr = new CUkfSystemModel{};
+        cv::tracking::AugmentedUnscentedKalmanFilterParams params{
+            static_cast<int>(dp),
+            static_cast<int>(mp),
+            static_cast<int>(cp),
+            1e-5,
+            1e-9,
+            m_model_ptr,
+            CV_64F};
+
+        UkfState initial_state;
+        initial_state.position = Vector2d{0.0, 0.0};
+        initial_state.speed = 0.0;
+        initial_state.heading = 270 * M_PI / 180;
+
+        params.stateInit = structToCvMat(initial_state);
+
+        m_filter = cv::tracking::createAugmentedUnscentedKalmanFilter(params);
     }
 
 protected: // methods
     void timerEvent(QTimerEvent *) override
     {
+        VehicleState state = m_controller.getState();
+        double v = state.speed;
+
         double dt =
             std::chrono::duration_cast<std::chrono::duration<double>>(
                 std::chrono::high_resolution_clock::now() - m_last_update)
                 .count();
         m_last_update = std::chrono::high_resolution_clock::now();
         m_controller.update(dt);
+
+        state = m_controller.getState();
+        double a = (state.speed - v) / dt;
+
+        UkfControl ukf_control;
+        UkfMeasurement ukf_measurement;
+
+        ukf_control.acceleration = a;
+        ukf_control.yaw_rate = m_controller.getYawRate();
+
+        ukf_measurement.position = state.position;
+        ukf_measurement.speed = state.speed;
+
+        m_model_ptr->setDeltaTime(dt);
+
+        m_filter->predict(structToCvMat(ukf_control));
+        UkfState ukf_state = cvMatToStruct<UkfState>(
+            m_filter->correct(structToCvMat(ukf_measurement)));
+
+        const Eigen::Rotation2Dd R{ukf_state.heading};
+        m_ukf_trajectory.emplace_back(
+            ukf_state.position + R * Vector2d{c_vehicle_wheel_base / 2, 0.0});
     }
 
     void keyPressEvent(QKeyEvent *e) override
@@ -322,7 +495,7 @@ protected: // methods
         auto x = vehicle_state.position;
         double alpha = vehicle_state.heading;
         const Eigen::Rotation2Dd R{alpha};
-        x += R * Eigen::Vector2d{c_vehicle_wheel_base / 2, 0.0};
+        x += R * Vector2d{c_vehicle_wheel_base / 2, 0.0};
 
         QPointF pos{x.x(), x.y()};
 
@@ -365,6 +538,21 @@ protected: // methods
             }
         }
         p.strokePath(path, QPen{Qt::gray, 1});
+
+        path = QPainterPath();
+        if (!m_ukf_trajectory.empty())
+        {
+            path.moveTo(
+                m_scale *
+                QPointF{m_ukf_trajectory[0].x(), m_ukf_trajectory[0].y()});
+            for (std::size_t i = 1; i < m_ukf_trajectory.size(); i++)
+            {
+                path.lineTo(
+                    m_scale *
+                    QPointF{m_ukf_trajectory[i].x(), m_ukf_trajectory[i].y()});
+            }
+        }
+        p.strokePath(path, QPen{Qt::green, 1});
 
         const auto draw_vehicle = [&]() {
             p.drawRect(QRect(
@@ -441,6 +629,10 @@ private: // fields
         std::chrono::high_resolution_clock::now();
     QPointF m_camera_pos;
     double m_scale = 15;
+
+    cv::Ptr<CUkfSystemModel> m_model_ptr;
+    cv::Ptr<cv::tracking::UnscentedKalmanFilter> m_filter;
+    std::vector<Vector2d> m_ukf_trajectory;
 };
 
 } // namespace
