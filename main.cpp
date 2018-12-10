@@ -96,8 +96,9 @@ public: // methods
 
         static constexpr double c_steering_time = 0.5;
 
-        if ((m_turning_left && theta > 0) || (m_turning_right && theta < 0) ||
-            (!m_turning_left && !m_turning_right))
+        if (std::abs(v) > c_epsilon &&
+            ((m_turning_left && theta > 0) || (m_turning_right && theta < 0) ||
+             (!m_turning_left && !m_turning_right)))
         {
             if (std::abs(theta) > c_epsilon)
             {
@@ -113,7 +114,7 @@ public: // methods
                 theta = 0.0;
             }
         }
-        else
+        else if (m_turning_left || m_turning_right)
         {
             const double sign = m_turning_left ? -1 : 1;
             const double steering_rate =
