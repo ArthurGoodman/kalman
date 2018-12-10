@@ -339,11 +339,13 @@ protected: // methods
 
         if (m_camera_pos.isNull())
         {
-            m_camera_pos = -pos;
+            m_camera_pos = m_scale * -pos;
         }
-        double len = QVector2D(-pos - m_camera_pos).length() / height();
+        double len =
+            QVector2D(m_scale * -pos - m_camera_pos).length() / height();
         double c_cam_alpha = gain(len, 3);
-        m_camera_pos = c_cam_alpha * -pos + (1.0 - c_cam_alpha) * m_camera_pos;
+        m_camera_pos =
+            c_cam_alpha * m_scale * -pos + (1.0 - c_cam_alpha) * m_camera_pos;
 
         m_trajectory.emplace_back(pos);
 
@@ -355,55 +357,58 @@ protected: // methods
         QPainterPath path;
         if (!m_trajectory.empty())
         {
-            path.moveTo(m_trajectory[0]);
+            path.moveTo(m_scale * m_trajectory[0]);
             for (std::size_t i = 1; i < m_trajectory.size(); i++)
             {
-                path.lineTo(m_trajectory[i]);
+                path.lineTo(m_scale * m_trajectory[i]);
             }
         }
         p.strokePath(path, QPen{Qt::gray, 1});
 
         const auto draw_vehicle = [&]() {
-            p.drawRect(
-                QRect(0, -c_car_width / 2, c_vehicle_wheel_base, c_car_width));
+            p.drawRect(QRect(
+                m_scale * 0,
+                m_scale * -c_car_width / 2,
+                m_scale * c_vehicle_wheel_base,
+                m_scale * c_car_width));
         };
 
         const auto draw_wheel = [&]() {
             p.fillRect(
                 QRect(
-                    -c_vehicle_wheel_base / 8,
-                    -c_car_width / 8,
-                    c_vehicle_wheel_base / 4,
-                    c_car_width / 4),
+                    m_scale * -c_vehicle_wheel_base / 8,
+                    m_scale * -c_car_width / 8,
+                    m_scale * c_vehicle_wheel_base / 4,
+                    m_scale * c_car_width / 4),
                 Qt::white);
         };
 
         QPointF base_pos{vehicle_state.position.x(),
                          vehicle_state.position.y()};
 
-        p.translate(base_pos);
+        p.translate(m_scale * base_pos);
         p.rotate(vehicle_state.heading / M_PI * 180);
         draw_vehicle();
 
         p.save();
-        p.translate(c_vehicle_wheel_base, -c_car_width / 2);
+        p.translate(m_scale * c_vehicle_wheel_base, m_scale * -c_car_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(c_vehicle_wheel_base, c_car_width / 2);
+        p.translate(m_scale * c_vehicle_wheel_base, m_scale * c_car_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(0, -c_car_width / 2);
+        p.translate(m_scale * 0, m_scale * -c_car_width / 2);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(0, c_car_width / 2);
+        p.translate(m_scale * 0, m_scale * c_car_width / 2);
         draw_wheel();
         p.restore();
 
@@ -434,7 +439,7 @@ private: // fields
     std::chrono::high_resolution_clock::time_point m_last_update =
         std::chrono::high_resolution_clock::now();
     QPointF m_camera_pos;
-    double m_scale = 20;
+    double m_scale = 15;
 };
 
 } // namespace
