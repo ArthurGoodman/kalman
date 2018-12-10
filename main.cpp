@@ -95,33 +95,34 @@ public: // methods
 
         UkfState new_state;
 
-        const double w = control.yaw_rate;
-        if (std::abs(w) <= c_epsilon)
-        {
-            const Eigen::Rotation2Dd R{state.heading};
-            new_state.position =
-                state.position + R * Vector2d{state.speed, 0.0} * m_dt;
-        }
-        else
-        {
-            const double a = control.acceleration;
-            const double v = state.speed;
-            const double dt = state.speed;
-            const double alpha = state.heading;
+        // const double w = control.yaw_rate;
+        // if (std::abs(w) <= c_epsilon)
+        //{
+        const Eigen::Rotation2Dd R{state.heading};
+        new_state.position =
+            state.position + R * Vector2d{state.speed, 0.0} * m_dt;
+        //}
+        // else
+        //{
+        //    const double a = control.acceleration;
+        //    const double v = state.speed;
+        //    const double dt = state.speed;
+        //    const double alpha = state.heading;
 
-            const double delta_x =
-                1.0 / w / w *
-                ((v * w + a * w * dt) * std::sin(alpha + w * dt) +
-                 a * std::cos(alpha + w * dt) - v * w * std::sin(alpha) -
-                 a * std::cos(alpha));
-            const double delta_y =
-                1.0 / w / w *
-                ((-v * w - a * w * dt) * std::cos(alpha + w * dt) +
-                 a * std::sin(alpha + w * dt) + v * w * std::cos(alpha) -
-                 a * std::sin(alpha));
+        //    const double delta_x =
+        //        1.0 / w / w *
+        //        ((v * w + a * w * dt) * std::sin(alpha + w * dt) +
+        //         a * std::cos(alpha + w * dt) - v * w * std::sin(alpha) -
+        //         a * std::cos(alpha));
+        //    const double delta_y =
+        //        1.0 / w / w *
+        //        ((-v * w - a * w * dt) * std::cos(alpha + w * dt) +
+        //         a * std::sin(alpha + w * dt) + v * w * std::cos(alpha) -
+        //         a * std::sin(alpha));
 
-            new_state.position = state.position + Vector2d{delta_x, delta_y};
-        }
+        //    new_state.position = state.position + Vector2d{delta_x, delta_y};
+        //}
+
         new_state.speed = state.speed + control.acceleration * m_dt;
 
         new_state.heading = state.heading + control.yaw_rate * m_dt;
@@ -347,15 +348,15 @@ public: // methods
             static_cast<int>(dp),
             static_cast<int>(mp),
             static_cast<int>(cp),
-            1e-5,
-            1e-9,
+            1e-1,
+            1e-1,
             m_model_ptr,
             CV_64F};
 
         UkfState initial_state;
         initial_state.position = Vector2d{0.0, 0.0};
         initial_state.speed = 0.0;
-        initial_state.heading = 270 * M_PI / 180;
+        initial_state.heading = -M_PI / 2;
 
         params.stateInit = structToCvMat(initial_state);
 
