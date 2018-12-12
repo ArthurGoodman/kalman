@@ -197,40 +197,38 @@ public: // methods
                 v = 0.0;
             }
         }
+
+        static constexpr double c_acceleration_time = 0.25;
+        static constexpr double c_jerk =
+            c_max_acceleration / c_acceleration_time;
+
+        double delta_a = 0.0;
+
+        if (m_accelerating || m_accelerating_backwards)
+        {
+            const double sign = m_accelerating ? 1 : -1;
+            delta_a = sign * c_jerk * dt;
+        }
         else
         {
-            static constexpr double c_acceleration_time = 0.25;
-            static constexpr double c_jerk =
-                c_max_acceleration / c_acceleration_time;
-
-            double delta_a = 0.0;
-
-            if (m_accelerating || m_accelerating_backwards)
+            if (std::abs(a) > c_epsilon)
             {
-                const double sign = m_accelerating ? 1 : -1;
+                const double sign = a > 0 ? -1 : 1;
                 delta_a = sign * c_jerk * dt;
             }
             else
             {
-                if (std::abs(a) > c_epsilon)
-                {
-                    const double sign = a > 0 ? -1 : 1;
-                    delta_a = sign * c_jerk * dt;
-                }
-                else
-                {
-                    a = 0.0;
-                }
-            }
-
-            if (std::abs(delta_a) > std::abs(a) && delta_a * a < 0)
-            {
                 a = 0.0;
             }
-            else
-            {
-                a += delta_a;
-            }
+        }
+
+        if (std::abs(delta_a) > std::abs(a) && delta_a * a < 0)
+        {
+            a = 0.0;
+        }
+        else
+        {
+            a += delta_a;
         }
 
         static constexpr double c_steering_time = 0.5;
@@ -420,6 +418,8 @@ protected: // methods
 
         while (m_accumulator >= c_dt)
         {
+            m_accumulator -= c_dt;
+
             double v = m_controller.getState().speed;
 
             m_controller.update(c_dt);
@@ -452,32 +452,28 @@ protected: // methods
                     R * Vector2d{c_vehicle_wheel_base / 2, 0.0});
             }
 
+            auto x = state.position;
+            double alpha = state.heading;
+            const Eigen::Rotation2Dd R{alpha};
+            x += R * Vector2d{c_vehicle_wheel_base / 2, 0.0};
+
+            QPointF pos{x.x(), x.y()};
+            m_trajectory.emplace_back(pos);
+
+            static const auto gain = [](double x, double k) {
+                double a = 0.5 * pow(2.0 * ((x < 0.5) ? x : 1.0 - x), k);
+                return (x < 0.5) ? a : 1.0 - a;
+            };
+
+            if (m_camera_pos.isNull())
             {
-                auto x = state.position;
-                double alpha = state.heading;
-                const Eigen::Rotation2Dd R{alpha};
-                x += R * Vector2d{c_vehicle_wheel_base / 2, 0.0};
-
-                QPointF pos{x.x(), x.y()};
-                m_trajectory.emplace_back(pos);
-
-                static const auto gain = [](double x, double k) {
-                    double a = 0.5 * pow(2.0 * ((x < 0.5) ? x : 1.0 - x), k);
-                    return (x < 0.5) ? a : 1.0 - a;
-                };
-
-                if (m_camera_pos.isNull())
-                {
-                    m_camera_pos = m_scale * -pos;
-                }
-                double len = QVector2D(m_scale * -pos - m_camera_pos).length() /
-                             height();
-                double c_cam_alpha = gain(len, 3);
-                m_camera_pos = c_cam_alpha * m_scale * -pos +
-                               (1.0 - c_cam_alpha) * m_camera_pos;
+                m_camera_pos = m_scale * -pos;
             }
-
-            m_accumulator -= c_dt;
+            double len =
+                QVector2D(m_scale * -pos - m_camera_pos).length() / height();
+            double c_cam_alpha = gain(len, 3);
+            m_camera_pos = c_cam_alpha * m_scale * -pos +
+                           (1.0 - c_cam_alpha) * m_camera_pos;
         }
     }
 
