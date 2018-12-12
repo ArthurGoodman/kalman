@@ -1,3 +1,4 @@
+#include <cassert>
 #include <chrono>
 #include <iostream>
 #include <random>
@@ -39,6 +40,8 @@ cv::Mat structToCvMat(const T &data)
 template <class T>
 T cvMatToStruct(const cv::Mat &mat)
 {
+    assert(sizeof(T) / sizeof(double) == mat.rows);
+
     T data;
     for (int i = 0; i < mat.rows; i++)
     {
