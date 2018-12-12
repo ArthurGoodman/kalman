@@ -21,7 +21,7 @@ static constexpr double c_max_acceleration = 40 * 3.6;
 static constexpr double c_max_wheel_angle = M_PI / 5;
 
 static constexpr double c_vehicle_wheel_base = 3;
-static constexpr double c_vehicle_width = 2;
+static constexpr double c_vehicle_width = c_vehicle_wheel_base / 1.6;
 
 using Vector2d = Eigen::Matrix<double, 2, 1, false>;
 
@@ -445,10 +445,37 @@ protected: // methods
             UkfState ukf_state = cvMatToStruct<UkfState>(
                 m_filter->correct(structToCvMat(ukf_measurement)));
 
-            const Eigen::Rotation2Dd R{ukf_state.heading};
-            m_ukf_trajectory.emplace_back(
-                ukf_state.position +
-                R * Vector2d{c_vehicle_wheel_base / 2, 0.0});
+            {
+                const Eigen::Rotation2Dd R{ukf_state.heading};
+                m_ukf_trajectory.emplace_back(
+                    ukf_state.position +
+                    R * Vector2d{c_vehicle_wheel_base / 2, 0.0});
+            }
+
+            {
+                auto x = state.position;
+                double alpha = state.heading;
+                const Eigen::Rotation2Dd R{alpha};
+                x += R * Vector2d{c_vehicle_wheel_base / 2, 0.0};
+
+                QPointF pos{x.x(), x.y()};
+                m_trajectory.emplace_back(pos);
+
+                static const auto gain = [](double x, double k) {
+                    double a = 0.5 * pow(2.0 * ((x < 0.5) ? x : 1.0 - x), k);
+                    return (x < 0.5) ? a : 1.0 - a;
+                };
+
+                if (m_camera_pos.isNull())
+                {
+                    m_camera_pos = m_scale * -pos;
+                }
+                double len = QVector2D(m_scale * -pos - m_camera_pos).length() /
+                             height();
+                double c_cam_alpha = gain(len, 3);
+                m_camera_pos = c_cam_alpha * m_scale * -pos +
+                               (1.0 - c_cam_alpha) * m_camera_pos;
+            }
 
             m_accumulator -= c_dt;
         }
@@ -544,16 +571,10 @@ protected: // methods
 
     void paintEvent(QPaintEvent *) override
     {
-        static constexpr double c_car_width = c_vehicle_wheel_base / 1.75;
-
-        VehicleState vehicle_state = m_controller.getState();
-
-        auto x = vehicle_state.position;
-        double alpha = vehicle_state.heading;
-        const Eigen::Rotation2Dd R{alpha};
-        x += R * Vector2d{c_vehicle_wheel_base / 2, 0.0};
-
-        QPointF pos{x.x(), x.y()};
+        if (m_trajectory.empty())
+        {
+            return;
+        }
 
         static constexpr QRgb c_bg_color = qRgb(30, 30, 30);
 
@@ -561,23 +582,6 @@ protected: // methods
         p.fillRect(rect(), c_bg_color);
 
         p.translate(rect().center());
-
-        static const auto gain = [](double x, double k) {
-            double a = 0.5 * pow(2.0 * ((x < 0.5) ? x : 1.0 - x), k);
-            return (x < 0.5) ? a : 1.0 - a;
-        };
-
-        if (m_camera_pos.isNull())
-        {
-            m_camera_pos = m_scale * -pos;
-        }
-        double len =
-            QVector2D(m_scale * -pos - m_camera_pos).length() / height();
-        double c_cam_alpha = gain(len, 3);
-        m_camera_pos =
-            c_cam_alpha * m_scale * -pos + (1.0 - c_cam_alpha) * m_camera_pos;
-
-        m_trajectory.emplace_back(pos);
 
         p.setPen(QPen{Qt::white, 2});
 
@@ -613,21 +617,22 @@ protected: // methods
         const auto draw_vehicle = [&]() {
             p.drawRect(QRect(
                 m_scale * 0,
-                m_scale * -c_car_width / 2,
+                m_scale * -c_vehicle_width / 2,
                 m_scale * c_vehicle_wheel_base,
-                m_scale * c_car_width));
+                m_scale * c_vehicle_width));
         };
 
         const auto draw_wheel = [&]() {
             p.fillRect(
                 QRect(
                     m_scale * -c_vehicle_wheel_base / 8,
-                    m_scale * -c_car_width / 8,
+                    m_scale * -c_vehicle_width / 8,
                     m_scale * c_vehicle_wheel_base / 4,
-                    m_scale * c_car_width / 4),
+                    m_scale * c_vehicle_width / 4),
                 Qt::white);
         };
 
+        VehicleState vehicle_state = m_controller.getState();
         QPointF base_pos{vehicle_state.position.x(),
                          vehicle_state.position.y()};
 
@@ -636,24 +641,26 @@ protected: // methods
         draw_vehicle();
 
         p.save();
-        p.translate(m_scale * c_vehicle_wheel_base, m_scale * -c_car_width / 2);
+        p.translate(
+            m_scale * c_vehicle_wheel_base, m_scale * -c_vehicle_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(m_scale * c_vehicle_wheel_base, m_scale * c_car_width / 2);
+        p.translate(
+            m_scale * c_vehicle_wheel_base, m_scale * c_vehicle_width / 2);
         p.rotate(vehicle_state.wheel_angle / M_PI * 180);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(m_scale * 0, m_scale * -c_car_width / 2);
+        p.translate(m_scale * 0, m_scale * -c_vehicle_width / 2);
         draw_wheel();
         p.restore();
 
         p.save();
-        p.translate(m_scale * 0, m_scale * c_car_width / 2);
+        p.translate(m_scale * 0, m_scale * c_vehicle_width / 2);
         draw_wheel();
         p.restore();
 
@@ -693,9 +700,9 @@ private: // fields
 
     std::random_device m_rd;
     std::mt19937 m_gen;
-    std::normal_distribution<double> m_position_dist{0, 0.5};
-    std::normal_distribution<double> m_speed_dist{0, 1e-2};
-    std::normal_distribution<double> m_heading_dist{0, 1e-2};
+    std::normal_distribution<double> m_position_dist{0, 0};
+    std::normal_distribution<double> m_speed_dist{0, 0};
+    std::normal_distribution<double> m_heading_dist{0, 0};
 };
 
 } // namespace
