@@ -181,8 +181,16 @@ public: // methods
 
             if (std::abs(v) > c_epsilon)
             {
-                double sign = v > 0 ? -1 : 1;
-                v += sign * c_acceleration * dt;
+                const double sign = v > 0 ? -1 : 1;
+                const double delta_v = sign * c_acceleration * dt;
+                if (std::abs(delta_v) > std::abs(v) && delta_v * v < 0)
+                {
+                    v = 0.0;
+                }
+                else
+                {
+                    v += delta_v;
+                }
             }
             else
             {
@@ -195,49 +203,56 @@ public: // methods
             static constexpr double c_jerk =
                 c_max_acceleration / c_acceleration_time;
 
+            double delta_a = 0.0;
+
             if (m_accelerating || m_accelerating_backwards)
             {
-                if (m_accelerating)
-                {
-                    a += c_jerk * dt;
-                }
-                else
-                {
-                    a -= c_jerk * dt;
-                }
+                const double sign = m_accelerating ? 1 : -1;
+                delta_a = sign * c_jerk * dt;
             }
             else
             {
                 if (std::abs(a) > c_epsilon)
                 {
-                    double sign = a > 0 ? -1 : 1;
-                    a += sign * c_jerk * dt;
+                    const double sign = a > 0 ? -1 : 1;
+                    delta_a = sign * c_jerk * dt;
                 }
                 else
                 {
                     a = 0.0;
                 }
             }
+
+            if (std::abs(delta_a) > std::abs(a) && delta_a * a < 0)
+            {
+                a = 0.0;
+            }
+            else
+            {
+                a += delta_a;
+            }
         }
 
         static constexpr double c_steering_time = 0.5;
+
+        double delta_theta = 0.0;
 
         if (std::abs(v) > c_epsilon &&
             ((m_turning_left && theta > 0) || (m_turning_right && theta < 0) ||
              (!m_turning_left && !m_turning_right)))
         {
-            if (std::abs(theta) > c_epsilon)
-            {
-                const double sign = theta > 0 ? -1 : 1;
-                const double steering_rate =
-                    sign * c_max_wheel_angle / c_steering_time * 0.975 *
-                    std::pow(std::abs(v) / c_max_speed, 1.0 / 8);
+            const double sign = theta > 0 ? -1 : 1;
+            const double steering_rate =
+                sign * c_max_wheel_angle / c_steering_time * 0.975 *
+                std::pow(std::abs(v) / c_max_speed, 1.0 / 8);
 
-                theta += steering_rate * dt;
+            if (std::abs(theta) <= c_epsilon)
+            {
+                theta = 0.0;
             }
             else
             {
-                theta = 0.0;
+                delta_theta = steering_rate * dt;
             }
         }
         else if (m_turning_left || m_turning_right)
@@ -246,8 +261,16 @@ public: // methods
             const double steering_rate =
                 sign * c_max_wheel_angle / c_steering_time *
                 (1.0 - 0.975 * std::pow(std::abs(v) / c_max_speed, 1.0 / 8));
+            delta_theta = steering_rate * dt;
+        }
 
-            theta += steering_rate * dt;
+        if (std::abs(delta_theta) > std::abs(theta) && delta_theta * theta < 0)
+        {
+            theta = 0.0;
+        }
+        else
+        {
+            theta += delta_theta;
         }
 
         const double w = std::tan(theta) / c_vehicle_wheel_base * v;
@@ -384,40 +407,51 @@ public: // methods
 protected: // methods
     void timerEvent(QTimerEvent *) override
     {
-        VehicleState state = m_controller.getState();
-        double v = state.speed;
+        static constexpr double c_dt = 1e-3;
 
-        double dt =
+        auto now = std::chrono::high_resolution_clock::now();
+        double frame_time =
             std::chrono::duration_cast<std::chrono::duration<double>>(
-                std::chrono::high_resolution_clock::now() - m_last_update)
+                now - m_last_update)
                 .count();
-        m_last_update = std::chrono::high_resolution_clock::now();
-        m_controller.update(dt);
+        m_last_update = now;
 
-        state = m_controller.getState();
-        double a = (state.speed - v) / dt;
+        m_accumulator += frame_time;
 
-        UkfControl ukf_control;
-        UkfMeasurement ukf_measurement;
+        while (m_accumulator >= c_dt)
+        {
+            double v = m_controller.getState().speed;
 
-        ukf_control.acceleration = a;
-        ukf_control.yaw_rate = m_controller.getYawRate();
+            m_controller.update(c_dt);
 
-        ukf_measurement.position =
-            state.position +
-            Vector2d{m_position_dist(m_gen), m_position_dist(m_gen)};
-        ukf_measurement.speed = state.speed + m_speed_dist(m_gen);
-        ukf_measurement.heading = state.heading + m_heading_dist(m_gen);
+            VehicleState state = m_controller.getState();
+            double a = (state.speed - v) / c_dt;
 
-        m_model_ptr->setDeltaTime(dt);
+            UkfControl ukf_control;
+            UkfMeasurement ukf_measurement;
 
-        m_filter->predict(structToCvMat(ukf_control));
-        UkfState ukf_state = cvMatToStruct<UkfState>(
-            m_filter->correct(structToCvMat(ukf_measurement)));
+            ukf_control.acceleration = a;
+            ukf_control.yaw_rate = m_controller.getYawRate();
 
-        const Eigen::Rotation2Dd R{ukf_state.heading};
-        m_ukf_trajectory.emplace_back(
-            ukf_state.position + R * Vector2d{c_vehicle_wheel_base / 2, 0.0});
+            ukf_measurement.position =
+                state.position +
+                Vector2d{m_position_dist(m_gen), m_position_dist(m_gen)};
+            ukf_measurement.speed = state.speed + m_speed_dist(m_gen);
+            ukf_measurement.heading = state.heading + m_heading_dist(m_gen);
+
+            m_model_ptr->setDeltaTime(c_dt);
+
+            m_filter->predict(structToCvMat(ukf_control));
+            UkfState ukf_state = cvMatToStruct<UkfState>(
+                m_filter->correct(structToCvMat(ukf_measurement)));
+
+            const Eigen::Rotation2Dd R{ukf_state.heading};
+            m_ukf_trajectory.emplace_back(
+                ukf_state.position +
+                R * Vector2d{c_vehicle_wheel_base / 2, 0.0});
+
+            m_accumulator -= c_dt;
+        }
     }
 
     void keyPressEvent(QKeyEvent *e) override
@@ -649,6 +683,7 @@ private: // fields
     std::vector<QPointF> m_trajectory;
     std::chrono::high_resolution_clock::time_point m_last_update =
         std::chrono::high_resolution_clock::now();
+    double m_accumulator = 0.0;
     QPointF m_camera_pos;
     double m_scale = 15;
 
