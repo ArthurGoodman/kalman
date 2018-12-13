@@ -392,15 +392,15 @@ public: // methods
 
         params.stateInit = structToCvMat(initial_state);
 
-        params.processNoiseCov.at<double>(0, 0) = 1e-1;
-        params.processNoiseCov.at<double>(1, 1) = 1e-1;
-        params.processNoiseCov.at<double>(2, 2) = 1e-1;
-        params.processNoiseCov.at<double>(3, 3) = 1e-1;
+        params.processNoiseCov.at<double>(0, 0) = 1e-6;
+        params.processNoiseCov.at<double>(1, 1) = 1e-6;
+        params.processNoiseCov.at<double>(2, 2) = 1e-4;
+        params.processNoiseCov.at<double>(3, 3) = 1e-4;
 
         params.measurementNoiseCov.at<double>(0, 0) = 0.5;
         params.measurementNoiseCov.at<double>(1, 1) = 0.5;
-        params.measurementNoiseCov.at<double>(2, 2) = 1e-2;
-        params.measurementNoiseCov.at<double>(3, 3) = 1e-2;
+        params.measurementNoiseCov.at<double>(2, 2) = 0.01;
+        params.measurementNoiseCov.at<double>(3, 3) = 0.1;
 
         m_filter = cv::tracking::createAugmentedUnscentedKalmanFilter(params);
     }
@@ -422,6 +422,7 @@ protected: // methods
         while (m_accumulator >= c_dt)
         {
             m_accumulator -= c_dt;
+            m_time += c_dt;
 
             double v = m_controller.getState().speed;
 
@@ -433,18 +434,29 @@ protected: // methods
             UkfControl ukf_control;
             UkfMeasurement ukf_measurement;
 
-            ukf_control.acceleration = a;
-            ukf_control.yaw_rate = m_controller.getYawRate();
+            ukf_control.acceleration = a + m_acceleration_dist(m_gen);
+            ukf_control.yaw_rate =
+                m_controller.getYawRate() + m_yaw_rate_dist(m_gen);
 
-            ukf_measurement.position =
-                state.position +
-                Vector2d{m_position_dist(m_gen), m_position_dist(m_gen)};
+            m_model_ptr->setDeltaTime(c_dt);
+            auto pred_state = cvMatToStruct<UkfState>(
+                m_filter->predict(structToCvMat(ukf_control)));
+
+            double dummy;
+            if (std::modf(m_time, &dummy) <= c_dt)
+            {
+                ukf_measurement.position =
+                    state.position +
+                    Vector2d{m_position_dist(m_gen), m_position_dist(m_gen)};
+            }
+            else
+            {
+                ukf_measurement.position = pred_state.position;
+            }
+
             ukf_measurement.speed = state.speed + m_speed_dist(m_gen);
             ukf_measurement.heading = state.heading + m_heading_dist(m_gen);
 
-            m_model_ptr->setDeltaTime(c_dt);
-
-            m_filter->predict(structToCvMat(ukf_control));
             UkfState ukf_state = cvMatToStruct<UkfState>(
                 m_filter->correct(structToCvMat(ukf_measurement)));
 
@@ -699,9 +711,13 @@ private: // fields
 
     std::random_device m_rd;
     std::mt19937 m_gen;
-    std::normal_distribution<double> m_position_dist{0, 0};
-    std::normal_distribution<double> m_speed_dist{0, 0};
-    std::normal_distribution<double> m_heading_dist{0, 0};
+    std::normal_distribution<double> m_position_dist{0, 0.5};
+    std::normal_distribution<double> m_speed_dist{0, 0.01};
+    std::normal_distribution<double> m_heading_dist{0, 0.1};
+    std::normal_distribution<double> m_acceleration_dist{0, 0.01};
+    std::normal_distribution<double> m_yaw_rate_dist{0, 0.01};
+
+    double m_time = 0.0;
 };
 
 } // namespace
