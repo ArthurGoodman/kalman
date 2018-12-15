@@ -18,7 +18,7 @@ namespace {
 static constexpr double c_epsilon = 1e-4;
 
 static constexpr double c_max_speed = 200 * 3.6;
-static constexpr double c_max_acceleration = 40 * 3.6;
+static constexpr double c_max_acceleration = 10 * 3.6;
 static constexpr double c_max_wheel_angle = M_PI / 5;
 
 static constexpr double c_vehicle_wheel_base = 3;
